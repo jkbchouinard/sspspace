@@ -77,6 +77,9 @@ class SSPEncoder:
         self.length_scale = length_scale * np.ones((self.domain_dim,1))
         
         self.phase_matrix = phase_matrix
+        self.bias = np.zeros((self.ssp_dim,1))
+        self.bias[1:(self.ssp_dim + 1) // 2,:] = np.random.uniform(-np.pi,np.pi,size=((self.ssp_dim - 1)//2,1))
+        self.bias[-1:self.ssp_dim // 2:-1] = -self.bias[1:(self.ssp_dim + 1) // 2,:]
 
     def update_lengthscale(self, scale):
         '''
@@ -90,7 +93,7 @@ class SSPEncoder:
         assert self.length_scale.size == self.domain_dim
         ### end if
         
-    def encode(self,x):
+    def encode(self,x,allo=False):
         '''
         Transforms input data into an SSP representation.
 
@@ -98,6 +101,12 @@ class SSPEncoder:
         -----------
         x : np.ndarray
             A (num_samples, domain_dim) array representing data to be encoded.
+        
+        allo : Boolean
+            A parameter determining whether or not data should be encoded in
+            the allocentric (True) or egocentric (False, default) space. If
+            encoding in the egocentric space, self.encode([[0]*domain_dim])
+            will be equivalent to the identity vector ([[1,0,...,0]]).
 
         Returns:
         --------
@@ -111,7 +120,10 @@ class SSPEncoder:
         assert ls_mat.shape == (self.domain_dim, self.domain_dim), f'Expected Len Scale mat with dimensions {(self.domain_dim, self.domain_dim)}, got {ls_mat.shape}'
         scaled_x = x @ ls_mat
         # TODO: add conditional debugging catch for non-zero imaginary components of the data.
-        data = np.fft.ifft( np.exp( 1.j * self.phase_matrix @ scaled_x.T), axis=0 ).real
+        phase_embedding = self.phase_matrix @ scaled_x.T
+        if allo:
+            phase_embedding += self.bias
+        data = np.fft.ifft( np.exp( 1.j * phase_embedding), axis=0 ).real
         return SSP(data.T)
 
     def gradient(self, phi):
@@ -179,7 +191,6 @@ class SSPEncoder:
         return data.T
     
     
-    
 # Make Encoder Matrices
 def RandomSSPSpace(domain_dim:int, ssp_dim:int, 
                    length_scale:Optional[Union[int, np.ndarray]]=1, 
@@ -235,4 +246,3 @@ def HexagonalSSPSpace(domain_dim:int,
     phase_matrix = conjugate_symmetry(phases_scaled_rotated)
 
     return SSPEncoder(phase_matrix, length_scale=length_scale)
-
