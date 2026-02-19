@@ -57,7 +57,7 @@ class DiscreteSPSpace:
 
         
 class SSPEncoder:
-    def __init__(self, phase_matrix:np.ndarray, length_scale:Optional[Union[int, np.ndarray]]=1):
+    def __init__(self, phase_matrix:np.ndarray, length_scale:Optional[Union[int, np.ndarray]]=1, bias:Optional[Union[type(None), np.ndarray]]=None):
         '''
         Represents a domain using spatial semantic pointers.
 
@@ -78,9 +78,17 @@ class SSPEncoder:
         self.length_scale = length_scale * np.ones((self.domain_dim,1))
         
         self.phase_matrix = phase_matrix
-        self.bias = np.zeros((self.ssp_dim,1))
-        self.bias[1:(self.ssp_dim + 1) // 2,:] = np.random.uniform(-np.pi,np.pi,size=((self.ssp_dim - 1)//2,1))
-        self.bias[-1:self.ssp_dim // 2:-1] = -self.bias[1:(self.ssp_dim + 1) // 2,:]
+        if bias is None:
+            self.bias = np.zeros((self.ssp_dim,1))
+            self.bias[1:(self.ssp_dim + 1) // 2,:] = np.random.uniform(-np.pi,np.pi,size=((self.ssp_dim - 1)//2,1))
+            self.bias[-1:self.ssp_dim // 2:-1] = -self.bias[1:(self.ssp_dim + 1) // 2,:]
+        else:
+            assert len(bias.shape) == 2, f"Bias must be a 2D vector, got {len(bias.shape)}D tensor: {bias.shape}"
+            assert bias.shape[0] == self.ssp_dim and bias.shape[1] == 1, f"Expected bias of shape ({self.ssp_dim}, 1), got a ({bias.shape[0]}, {bias.shape[1]})"
+            assert np.allclose(bias[-1:self.ssp_dim // 2:-1], -bias[1:(self.ssp_dim + 1) // 2,:]), f"Bias is not conjugate-symmetric"
+            assert bias[0] == 0, f"0th entry of bias must be zero for unitary vectors"
+            
+            self.bias = bias
 
     def update_lengthscale(self, scale):
         '''
@@ -94,7 +102,7 @@ class SSPEncoder:
         assert self.length_scale.size == self.domain_dim
         ### end if
         
-    def encode(self,x,allo=False):
+    def encode(self, x, allo:Optional[bool]=False):
         '''
         Transforms input data into an SSP representation.
 
