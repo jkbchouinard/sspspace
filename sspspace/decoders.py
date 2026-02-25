@@ -1,3 +1,5 @@
+from typing import Optional
+
 import numpy as np
 from .util import sample_domain
 
@@ -8,9 +10,8 @@ class SSPDecoder:
         self.decoder_network = model 
         self.encoder = encoder
         self.domain_bounds = domain_bounds
-        pass
 
-    def decode(self, ssps, optimize = True):
+    def decode(self, ssps, optimize = True, allo:Optional[bool] = False):
 
         x0 = self.decoder_network.predict(ssps).reshape((-1,self.encoder.domain_dim))
         
@@ -18,7 +19,7 @@ class SSPDecoder:
             solns = np.zeros(x0.shape)
             for i in range(x0.shape[0]):
                 def min_func(x,target=ssps[i,:]):
-                    x_ssp = self.encoder.encode(np.atleast_2d(x))
+                    x_ssp = self.encoder.encode(np.atleast_2d(x), allo=allo)
                     return -np.inner(x_ssp, target).flatten()
                 soln = minimize(min_func, x0[i,:], 
                             method='L-BFGS-B',
@@ -39,7 +40,7 @@ class SSPSimilarityDecoder:
         self.encoder = encoder
         self.optim = optim
 
-    def decode(self, ssps, optimize = True):
+    def decode(self, ssps, optimize = True, allo:Optional[bool]=False):
         sims = self.sim_ssps | ssps
         
         x0 = self.sim_xs[np.argmax(sims, axis=0),:]
@@ -47,7 +48,7 @@ class SSPSimilarityDecoder:
             solns = np.zeros(x0.shape)
             for i in range(x0.shape[0]):
                 def min_func(x,target=ssps[i,:]):
-                    x_ssp = self.encoder.encode(np.atleast_2d(x))
+                    x_ssp = self.encoder.encode(np.atleast_2d(x), allo)
                     return -np.inner(x_ssp, target).flatten()
                 soln = minimize(min_func, x0[i,:], 
                             method='L-BFGS-B',
@@ -67,7 +68,8 @@ def train_decoder_net_sk(encoder, bounds, n_training_pts = 200000,
                         n_epochs = 100, 
                         patience = 3,
                         tolerance = 1e-6,
-                        verbose = True):
+                        verbose = True,
+                        allo:Optional[bool] = False):
     '''
         Trains a dense neural network to decode SSPs.
 
@@ -93,7 +95,7 @@ def train_decoder_net_sk(encoder, bounds, n_training_pts = 200000,
     if sample_points is None:
         sample_points = sample_domain(bounds, n_training_pts)
         print(sample_points.shape)
-    sample_ssps = encoder.encode(sample_points)
+    sample_ssps = encoder.encode(sample_points, allo=allo)
     
     if corrupt_training_examples == True:
         if gaussian_noise_std == 'auto':
@@ -118,7 +120,8 @@ def train_decoder_net_tf(encoder, bounds, n_training_pts=200000,
                       learning_rate=1e-3, 
                       n_epochs = 100, 
                       patience=3,
-                      verbose=True):
+                      verbose=True,
+                      allo:Optional[bool]=False):
     '''
         Trains a dense neural network to decode SSPs.
 
@@ -145,7 +148,7 @@ def train_decoder_net_tf(encoder, bounds, n_training_pts=200000,
             loss='mean_squared_error')
 
     sample_points = sample_domain(bounds, n_training_pts)
-    sample_ssps = encoder.encode(sample_points)
+    sample_ssps = encoder.encode(sample_points, allo=allo)
 
     shuffled_ssps, shuffled_pts = sklearn.utils.shuffle(sample_ssps, sample_points)
 

@@ -68,25 +68,36 @@ class SSPEncoder:
             A ssp_dim x domain_dim ndarray representing the frequency 
             components of the SSP representation.
 
-        length_scale : float or np.ndarray
+        length_scale : float or np.ndarray (Optional)
             Scales values before encoding.
             
+        bias : NoneType or np.ndarray (Optional)
+            Provides a shift in SSP space to remove the HRR identity 
+            vector from the manifold.
+        
         '''
+
+        assert len(phase_matrix.shape) == 2, f"Phase Matrix must be a 2-Tensor, got {len(phase_matrix.shape)}-Tensory of shape {phase_matrix.shape}"
+
         self.phase_matrix = phase_matrix
         self.domain_dim = self.phase_matrix.shape[1]
         self.ssp_dim = self.phase_matrix.shape[0]
+
+        assert np.allclose(phase_matrix[0,:], np.zeros(self.domain_dim)), f"One or more of the columns of the phase matrix have non-zero DC components"
+        assert np.allclose(phase_matrix[-1:self.ssp_dim // 2:-1,:], -phase_matrix[1:(self.ssp_dim + 1) // 2,:]), f"Phase Matrix is not conjugate-symmetric"
+
         self.length_scale = length_scale * np.ones((self.domain_dim,1))
-        
         self.phase_matrix = phase_matrix
+
         if bias is None:
             self.bias = np.zeros((self.ssp_dim,1))
             self.bias[1:(self.ssp_dim + 1) // 2,:] = np.random.uniform(-np.pi,np.pi,size=((self.ssp_dim - 1)//2,1))
             self.bias[-1:self.ssp_dim // 2:-1] = -self.bias[1:(self.ssp_dim + 1) // 2,:]
         else:
-            assert len(bias.shape) == 2, f"Bias must be a 2D vector, got {len(bias.shape)}D tensor: {bias.shape}"
-            assert bias.shape[0] == self.ssp_dim and bias.shape[1] == 1, f"Expected bias of shape ({self.ssp_dim}, 1), got a ({bias.shape[0]}, {bias.shape[1]})"
+            assert len(bias.shape) == 2, f"Bias must be a 2-Tensor, got {len(bias.shape)}-Tensor of shape {bias.shape}"
+            assert bias.shape[0] == self.ssp_dim and bias.shape[1] == 1, f"Expected bias of shape ({self.ssp_dim}, 1), got ({bias.shape[0]}, {bias.shape[1]})"
             assert np.allclose(bias[-1:self.ssp_dim // 2:-1], -bias[1:(self.ssp_dim + 1) // 2,:]), f"Bias is not conjugate-symmetric"
-            assert bias[0] == 0, f"0th entry of bias must be zero for unitary vectors"
+            assert bias[0] == 0, f"0th entry of bias must be zero to ensure unitarity"
             
             self.bias = bias
 
@@ -100,7 +111,6 @@ class SSPEncoder:
             assert scale.size == self.domain_dim
             self.length_scale = scale
         assert self.length_scale.size == self.domain_dim
-        ### end if
         
     def encode(self, x, allo:Optional[bool]=False):
         '''
@@ -111,7 +121,7 @@ class SSPEncoder:
         x : np.ndarray
             A (num_samples, domain_dim) array representing data to be encoded.
         
-        allo : Boolean
+        allo : Boolean (Optional)
             A parameter determining whether or not data should be encoded in
             the allocentric (True) or egocentric (False, default) space. If
             encoding in the egocentric space, self.encode([[0]*domain_dim])
@@ -128,14 +138,13 @@ class SSPEncoder:
         ls_mat = np.atleast_2d(np.diag(1/self.length_scale.flatten()))
         assert ls_mat.shape == (self.domain_dim, self.domain_dim), f'Expected Len Scale mat with dimensions {(self.domain_dim, self.domain_dim)}, got {ls_mat.shape}'
         scaled_x = x @ ls_mat
-        # TODO: add conditional debugging catch for non-zero imaginary components of the data.
         phase_embedding = self.phase_matrix @ scaled_x.T
         if allo:
             phase_embedding += self.bias
         data = np.fft.ifft( np.exp( 1.j * phase_embedding), axis=0 ).real
         return SSP(data.T)
 
-    def gradient(self, phi):
+    def gradient(self, phi, allo:Optional[bool]=False):
         '''
         Returns the gradient of an encoded SSP.  
 
@@ -144,6 +153,11 @@ class SSPEncoder:
 
         phi : SSP
             An SSP object representing a single SSP. i.e., has shape (1, ssp_dim)
+
+        allo : Boolean (Optional)
+            A parameter indicating whether or not phi is an SSP encoding in egocentric 
+            (False) or allocentric (True) space. Necessary for removing the bias term
+            if encoded in allocentric space.
 
         Returns:
         --------
@@ -155,6 +169,8 @@ class SSPEncoder:
         '''
 
         phi_fourier = np.fft.fft(phi, axis=1)
+        if allo:
+            phi_fourier = np.exp(1.j * (np.atan2(phi_fourier.imag, phi_fourier.real) - self.bias.T))
         ls_mat = np.atleast_2d(np.diag(1 / self.length_scale.flatten()))
         # d/dx[e^iAx] = hadamard(iA, e^{iAx})
         deriv_mat = 1.j * (self.phase_matrix @ ls_mat) # Derivative coeff
@@ -162,8 +178,7 @@ class SSPEncoder:
         fourier_grad = np.einsum('dm,d->md',deriv_mat,phi_fourier.flatten())
         return np.fft.ifft(fourier_grad, axis=1).real
 
-    
-    def encode_and_deriv(self,x):
+    def encode_and_deriv(self, x, allo:Optional[bool]=False):
         '''
         Returns the ssp representation of the data and the derivative of
         the encoding.
@@ -173,29 +188,40 @@ class SSPEncoder:
         x : np.ndarray
             A (num_samples, domain_dim) array representing data to be encoded.
 
+        allo : Boolean
+            A parameter determining if the resulting SSP will be encoding in
+            egocentric (False) or Allocentric (True) space -- this only
+            affects the SSP representation of the data, not the gradient.
+
         Returns:
         --------
         data : np.ndarray
-            A (num_samples, ssp_dim) array of the ssp representation of the 
+            A (num_samples, ssp_dim) array of the SSP representation of the 
             data
 
         grad : np.ndarray
-            A (num_samples, ssp_dim, domain_dim) array of the ssp representation of the data
+            A (num_samples, ssp_dim, domain_dim) array of the SSP representation of the data
 
         '''
         x = np.atleast_2d(x)
         ls_mat = np.atleast_2d(np.diag(1 / self.length_scale))
         scaled_x = x @ ls_mat
-        data = np.fft.ifft( np.exp( 1.j * self.phase_matrix @ scaled_x.T ), axis=0 ).real
+        phase_embedding = self.phase_matrix @ scaled_x.T
+        if allo:
+            phase_embedding += self.bias
+        data = np.fft.ifft( np.exp( 1.j * phase_embedding), axis=0 ).real
         ddata = np.fft.ifft( 1.j * (self.phase_matrix @ ls_mat) @ np.exp( 1.j * self.phase_matrix @ scaled_x.T ), axis=0 ).real
         return SSP(data.T), ddata.T
     
-    def encode_fourier(self,x):
+    def encode_fourier(self, x, allo:Optional[bool]=False):
         x = np.atleast_2d(x)
         ls_mat = np.atleast_2d(np.diag(1/self.length_scale.flatten()))
         assert ls_mat.shape == (self.domain_dim, self.domain_dim), f'Expected Len Scale mat with dimensions {(self.domain_dim, self.domain_dim)}, got {ls_mat.shape}'
         scaled_x = x @ ls_mat
-        data = np.exp( 1.j * self.phase_matrix @ scaled_x.T)
+        phase_embedding = self.phase_matrix @ scaled_x.T
+        if allo:
+            phase_embedding += self.bias
+        data = np.exp( 1.j * phase_embedding)
 
         return data.T
     
